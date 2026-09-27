@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 from app.agent.tools import InvestigationTools
 from app.validators.constraints import PurchaseConstraintValidator
 from app.models import SupplierInfo, StorageInfo, BudgetInfo
+from app.actions.purchase_order import PurchaseOrderManager
 
 
 def test_investigation_tools():
@@ -184,6 +185,44 @@ def test_scenario_2_modify():
     
     assert all_passed is True
     print("\n✓ Scenario 2 PASSED")
+
+
+
+def test_po_creation_retry_then_success(monkeypatch):
+    """PO creation fails once, retries, then succeeds."""
+    manager = PurchaseOrderManager(failure_rate=1.0)
+
+    # Force exactly one failure, then success.
+    values = iter([0.5, 1.0])
+    monkeypatch.setattr("app.actions.purchase_order.random.random", lambda: next(values))
+
+    supplier = SupplierInfo(
+        supplier_id="supplier_x",
+        name="Supplier X",
+        product_id="coca-cola-500ml",
+        unit_price=18.50,
+        moq=500,
+        max_order_qty=5000,
+        lead_time_days=2,
+        available_quantity=5000,
+        reliability_score=0.95,
+    )
+
+    po, validation = manager.create_purchase_order(
+        recommendation_id="REC-RETRY-TEST",
+        product_id="coca-cola-500ml",
+        product_name="Coca-Cola 500ml",
+        node_id="delhi-ncr-dark-store-a",
+        supplier_info=supplier,
+        quantity=800,
+        max_retries=1,
+    )
+
+    assert po is not None
+    assert validation.escalated is False
+    assert validation.retry_count == 1
+    assert validation.failures == []
+    assert all(validation.checks.values())
 
 
 def test_scenario_3_reject():
