@@ -1,0 +1,23 @@
+{
+  "delhi-ncr-dark-store-a": [
+    {
+      "po_id": "PO-12345",
+      "product_id": "coca-cola-500ml",
+      "supplier_id": "supplier_x",
+      "quantity": 500,
+      "expected_delivery": "2026-09-29",
+      "status": "in_transit"
+    }
+  ],
+  "delhi-ncr-dark-store-b": [],
+  "mumbai-dark-store-a": [
+    {
+      "po_id": "PO-12346",
+      "product_id": "coca-cola-500ml",
+      "supplier_id": "supplier_z",
+      "quantity": 1000,
+      "expected_delivery": "2026-09-28",
+      "status": "in_transit"
+    }
+  ]
+}

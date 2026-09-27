@@ -1,0 +1,28 @@
+{
+  "delhi-ncr-dark-store-a": {
+    "capacity": 5000,
+    "current_usage": 3200,
+    "available": 1800,
+    "allocations": {
+      "coca-cola-500ml": 800,
+      "pepsi-500ml": 600,
+      "lays-chips-50g": 500
+    }
+  },
+  "delhi-ncr-dark-store-b": {
+    "capacity": 6000,
+    "current_usage": 3800,
+    "available": 2200,
+    "allocations": {
+      "coca-cola-500ml": 900
+    }
+  },
+  "mumbai-dark-store-a": {
+    "capacity": 4500,
+    "current_usage": 3000,
+    "available": 1500,
+    "allocations": {
+      "coca-cola-500ml": 700
+    }
+  }
+}

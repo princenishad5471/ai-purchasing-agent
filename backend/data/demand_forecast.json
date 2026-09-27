@@ -1,0 +1,38 @@
+{
+  "delhi-ncr-dark-store-a": {
+    "coca-cola-500ml": {
+      "daily_avg": 85,
+      "forecast_7d": 595,
+      "forecast_14d": 1190,
+      "forecast_30d": 2550
+    },
+    "pepsi-500ml": {
+      "daily_avg": 70,
+      "forecast_7d": 490,
+      "forecast_14d": 980,
+      "forecast_30d": 2100
+    },
+    "lays-chips-50g": {
+      "daily_avg": 120,
+      "forecast_7d": 840,
+      "forecast_14d": 1680,
+      "forecast_30d": 3600
+    }
+  },
+  "delhi-ncr-dark-store-b": {
+    "coca-cola-500ml": {
+      "daily_avg": 95,
+      "forecast_7d": 665,
+      "forecast_14d": 1330,
+      "forecast_30d": 2850
+    }
+  },
+  "mumbai-dark-store-a": {
+    "coca-cola-500ml": {
+      "daily_avg": 78,
+      "forecast_7d": 546,
+      "forecast_14d": 1092,
+      "forecast_30d": 2340
+    }
+  }
+}

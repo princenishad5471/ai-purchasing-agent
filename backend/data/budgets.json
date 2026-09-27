@@ -1,0 +1,32 @@
+{
+  "delhi-ncr-dark-store-a": {
+    "node_budget": 500000,
+    "spent_this_month": 320000,
+    "remaining": 180000,
+    "categories": {
+      "beverages": 50000,
+      "snacks": 30000,
+      "dairy": 40000
+    }
+  },
+  "delhi-ncr-dark-store-b": {
+    "node_budget": 600000,
+    "spent_this_month": 250000,
+    "remaining": 350000,
+    "categories": {
+      "beverages": 60000,
+      "snacks": 35000,
+      "dairy": 45000
+    }
+  },
+  "mumbai-dark-store-a": {
+    "node_budget": 550000,
+    "spent_this_month": 400000,
+    "remaining": 150000,
+    "categories": {
+      "beverages": 45000,
+      "snacks": 28000,
+      "dairy": 38000
+    }
+  }
+}

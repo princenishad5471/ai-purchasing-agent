@@ -1,0 +1,60 @@
+{
+  "supplier_x": {
+    "supplier_id": "supplier_x",
+    "name": "Metro Beverages Pvt Ltd",
+    "products": {
+      "coca-cola-500ml": {
+        "moq": 500,
+        "max_order_qty": 2000,
+        "lead_time_days": 2,
+        "available_quantity": 5000,
+        "unit_price": 18.50,
+        "reliability_score": 0.92
+      },
+      "pepsi-500ml": {
+        "moq": 500,
+        "max_order_qty": 2000,
+        "lead_time_days": 2,
+        "available_quantity": 4500,
+        "unit_price": 18.00,
+        "reliability_score": 0.92
+      }
+    }
+  },
+  "supplier_y": {
+    "supplier_id": "supplier_y",
+    "name": "QuickServe Distribution",
+    "products": {
+      "coca-cola-500ml": {
+        "moq": 300,
+        "max_order_qty": 1500,
+        "lead_time_days": 3,
+        "available_quantity": 800,
+        "unit_price": 19.00,
+        "reliability_score": 0.85
+      },
+      "lays-chips-50g": {
+        "moq": 200,
+        "max_order_qty": 1000,
+        "lead_time_days": 1,
+        "available_quantity": 3000,
+        "unit_price": 10.50,
+        "reliability_score": 0.85
+      }
+    }
+  },
+  "supplier_z": {
+    "supplier_id": "supplier_z",
+    "name": "FastStock Suppliers",
+    "products": {
+      "coca-cola-500ml": {
+        "moq": 1000,
+        "max_order_qty": 3000,
+        "lead_time_days": 1,
+        "available_quantity": 10000,
+        "unit_price": 17.75,
+        "reliability_score": 0.95
+      }
+    }
+  }
+}

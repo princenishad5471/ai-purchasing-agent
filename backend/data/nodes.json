@@ -1,0 +1,20 @@
+{
+  "delhi-ncr-dark-store-a": {
+    "node_id": "delhi-ncr-dark-store-a",
+    "name": "Delhi-NCR Dark Store A",
+    "location": "Noida Sector 62",
+    "storage_capacity": 5000
+  },
+  "delhi-ncr-dark-store-b": {
+    "node_id": "delhi-ncr-dark-store-b",
+    "name": "Delhi-NCR Dark Store B",
+    "location": "Gurgaon Cyber City",
+    "storage_capacity": 6000
+  },
+  "mumbai-dark-store-a": {
+    "node_id": "mumbai-dark-store-a",
+    "name": "Mumbai Dark Store A",
+    "location": "Andheri West",
+    "storage_capacity": 4500
+  }
+}

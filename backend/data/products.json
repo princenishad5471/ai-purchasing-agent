@@ -1,0 +1,20 @@
+{
+  "coca-cola-500ml": {
+    "product_id": "coca-cola-500ml",
+    "name": "Coca-Cola 500ml",
+    "category": "beverages",
+    "unit": "bottle"
+  },
+  "pepsi-500ml": {
+    "product_id": "pepsi-500ml",
+    "name": "Pepsi 500ml",
+    "category": "beverages",
+    "unit": "bottle"
+  },
+  "lays-chips-50g": {
+    "product_id": "lays-chips-50g",
+    "name": "Lays Chips 50g",
+    "category": "snacks",
+    "unit": "packet"
+  }
+}
