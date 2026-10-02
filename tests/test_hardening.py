@@ -105,3 +105,133 @@ def test_committed_agent_spend_reduces_available_budget(isolated_db):
     assert result["constraint_validation"].validations["budget_available"].passed is False
     assert result["purchase_order"] is None
     assert _po_count() == 1  # only the prior PO
+
+
+# ---- LLM client: untrusted output and failures fail closed ----
+
+from types import SimpleNamespace
+from app.agent.llm_client import LLMClient, default_model
+from app.actions.purchase_order import PurchaseOrderManager
+from app.models import SupplierInfo
+
+REC = {"recommended_quantity": 800, "recommended_supplier": "supplier_x"}
+
+
+def _anthropic_client(text=None, error=None, stop_reason="end_turn"):
+    client = LLMClient(provider="anthropic")
+    client.init_error = None
+
+    def create(**kwargs):
+        if error:
+            raise error
+        return SimpleNamespace(
+            stop_reason=stop_reason,
+            content=[SimpleNamespace(type="text", text=text)],
+        )
+
+    client.anthropic_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    client._build_prompt = lambda rec, inv: "prompt"
+    return client
+
+
+GOOD = '{"decision": "ACCEPT", "final_quantity": 800, "reasoning": "ok", "evidence": ["a"], "confidence": 0.9}'
+
+
+def test_default_model_matches_provider():
+    assert default_model("anthropic").startswith("claude-")
+    assert LLMClient(provider="anthropic").model.startswith("claude-")
+
+
+def test_llm_valid_json_including_code_fence_is_accepted():
+    for text in (GOOD, f"```json\n{GOOD}\n```"):
+        result = _anthropic_client(text)._anthropic_decision(REC, None)
+        assert result["decision"] == "ACCEPT"
+        assert result["final_quantity"] == 800
+        assert result["llm_model"] == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize("bad", [
+    "not json",
+    '{"decision": "BUY_EVERYTHING", "final_quantity": 5, "reasoning": "", "evidence": [], "confidence": 0.9}',
+    '{"decision": "ACCEPT", "final_quantity": -5, "reasoning": "", "evidence": [], "confidence": 0.9}',
+    '{"decision": "ACCEPT", "final_quantity": 800, "reasoning": "", "evidence": [], "confidence": 7}',
+    '{"decision": "ACCEPT", "reasoning": ""}',
+])
+def test_llm_invalid_output_is_escalated(bad):
+    result = _anthropic_client(bad)._anthropic_decision(REC, None)
+    assert result["decision"] == "INVESTIGATE_FURTHER"
+    assert result["confidence"] == 0.0
+    assert result["llm_model"] != "demo_mode"
+
+
+def test_llm_api_error_or_early_stop_escalates_not_demo():
+    result = _anthropic_client(error=RuntimeError("boom"))._anthropic_decision(REC, None)
+    assert result["decision"] == "INVESTIGATE_FURTHER"
+    assert "boom" in result["reasoning"]
+
+    result = _anthropic_client(GOOD, stop_reason="max_tokens")._anthropic_decision(REC, None)
+    assert result["decision"] == "INVESTIGATE_FURTHER"
+
+
+def test_misconfigured_provider_escalates():
+    client = LLMClient(provider="nonsense")
+    result = client.make_decision(REC, None)
+    assert result["decision"] == "INVESTIGATE_FURTHER"
+    assert result["confidence"] == 0.0
+
+
+# ---- PO retry and post-action validation ----
+
+SUPPLIER = SupplierInfo(
+    supplier_id="supplier_x", name="Supplier X", unit_price=18.5, moq=500,
+    max_order_qty=5000, lead_time_days=2, available_quantity=5000, reliability_score=0.95,
+)
+
+
+def _create(manager, rec_id="REC-PO", max_retries=1):
+    return manager.create_purchase_order(
+        recommendation_id=rec_id, product_id="coca-cola-500ml", product_name="Coke",
+        node_id="delhi-ncr-dark-store-a", supplier_info=SUPPLIER, quantity=800,
+        max_retries=max_retries,
+    )
+
+
+def test_retry_after_partial_failure_reuses_same_po(isolated_db, monkeypatch):
+    manager = PurchaseOrderManager()
+    original = manager._validate_po_creation
+    calls = {"n": 0}
+
+    def flaky(po):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("validation backend down")
+        return original(po)
+
+    monkeypatch.setattr(manager, "_validate_po_creation", flaky)
+    po, validation = _create(manager)
+
+    assert po is not None and validation.escalated is False
+    assert _po_count() == 1
+
+
+def test_failed_post_check_escalates_and_frees_budget(isolated_db, monkeypatch):
+    manager = PurchaseOrderManager()
+    monkeypatch.setattr(manager, "_mock_notify_supplier", lambda po: False)
+    po, validation = _create(manager)
+
+    assert validation.escalated is True
+    assert validation.failures == ["supplier_notified"]
+    assert po.status.value == "failed"
+    assert db.get_committed_spend("delhi-ncr-dark-store-a") == 0
+
+
+def test_orchestrator_escalates_when_post_check_fails(isolated_db, monkeypatch):
+    monkeypatch.setattr(PurchaseOrderManager, "_mock_notify_supplier", lambda self, po: False)
+    rec_id = _recommendation()
+
+    result = PurchasingAgentOrchestrator().review_recommendation(rec_id)
+
+    steps = [t["step"] for t in result["trace"]]
+    assert "po_created" not in steps
+    assert "po_creation_failed_escalated" in steps
+    assert db.get_recommendation(rec_id)["status"] == "escalated"

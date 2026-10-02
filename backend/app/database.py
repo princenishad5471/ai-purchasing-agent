@@ -217,6 +217,14 @@ class Database:
                 po['expected_delivery'], po['status'], po.get('created_by', 'agent')
             ))
     
+    def update_po_status(self, po_id: str, status: str):
+        """Update a purchase order's status"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE purchase_orders SET status = ? WHERE po_id = ?",
+                (status, po_id)
+            )
+    
     def save_validation(self, validation: Dict[str, Any]):
         """Save validation results"""
         with self.get_cursor() as cursor:

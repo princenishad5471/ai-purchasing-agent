@@ -14,6 +14,7 @@ from app.models import (
 from app.database import db
 from app.agent.orchestrator import PurchasingAgentOrchestrator, AlreadyReviewedError
 from app.agent.tools import DataNotFoundError
+from app.agent.llm_client import default_model
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -143,7 +144,7 @@ async def get_trace(recommendation_id: str):
 async def health_check():
     """Detailed health check"""
     llm_provider = os.getenv("LLM_PROVIDER", "demo")
-    llm_model = os.getenv("LLM_MODEL", "gpt-4")
+    llm_model = os.getenv("LLM_MODEL") or default_model(llm_provider)
     
     return {
         "status": "healthy",

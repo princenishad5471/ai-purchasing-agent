@@ -31,7 +31,7 @@ class PurchasingAgentOrchestrator:
         
         # Initialize LLM client
         llm_provider = os.getenv("LLM_PROVIDER", "demo")
-        llm_model = os.getenv("LLM_MODEL", "gpt-4")
+        llm_model = os.getenv("LLM_MODEL") or None
         self.llm_client = LLMClient(provider=llm_provider, model=llm_model)
         
         self.validator = PurchaseConstraintValidator(approval_threshold=APPROVAL_COST_THRESHOLD)
@@ -187,7 +187,7 @@ class PurchasingAgentOrchestrator:
                     quantity=decision.final_quantity
                 )
                 
-                if purchase_order:
+                if purchase_order and not post_validation.escalated:
                     final_status = "accepted" if decision.decision == DecisionType.ACCEPT else "modified"
                     db.add_trace(recommendation_id, "po_created", {
                         "po_id": purchase_order.po_id,
@@ -198,18 +198,16 @@ class PurchasingAgentOrchestrator:
                         "timestamp": datetime.utcnow().isoformat(),
                         "message": f"Purchase order {purchase_order.po_id} created for ₹{purchase_order.total_amount:.2f}"
                     })
-                    
-                    if post_validation.escalated:
-                        trace.append({
-                            "step": "po_creation_failed_escalated",
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "message": "PO creation failed after retry, escalated to human"
-                        })
                 else:
+                    detail = "; ".join(post_validation.failures)
+                    db.add_trace(recommendation_id, "po_creation_escalated", {
+                        "po_id": purchase_order.po_id if purchase_order else None,
+                        "failures": post_validation.failures
+                    })
                     trace.append({
-                        "step": "po_creation_failed",
+                        "step": "po_creation_failed_escalated",
                         "timestamp": datetime.utcnow().isoformat(),
-                        "message": "PO creation failed"
+                        "message": f"PO creation failed after retry, escalated to human: {detail}"
                     })
             
             else:
