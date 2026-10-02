@@ -9,6 +9,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // API key stays server-side in the dev server; it is never sent to the browser
+        headers: process.env.API_KEY ? { 'X-API-Key': process.env.API_KEY } : {},
       }
     }
   }

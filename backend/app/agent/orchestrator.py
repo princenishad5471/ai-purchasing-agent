@@ -1,5 +1,6 @@
 """Agent orchestrator - main decision flow"""
 import os
+import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import uuid
@@ -20,6 +21,10 @@ MIN_AUTO_CONFIDENCE = 0.7
 
 class AlreadyReviewedError(Exception):
     """Recommendation has already been (or is being) reviewed"""
+
+
+class NotApprovableError(Exception):
+    """Human approval cannot be applied to this recommendation"""
 
 
 class PurchasingAgentOrchestrator:
@@ -167,48 +172,9 @@ class PurchasingAgentOrchestrator:
             if (validation_result.all_passed
                     and not validation_result.requires_escalation
                     and not decision.requires_approval):
-                db.add_trace(recommendation_id, "po_creation_started", {})
-                trace.append({
-                    "step": "po_creation_started",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "message": "Creating purchase order"
-                })
-                
-                # Import here to avoid circular dependency
-                from app.actions.purchase_order import PurchaseOrderManager
-                po_manager = PurchaseOrderManager()
-                
-                purchase_order, post_validation = po_manager.create_purchase_order(
-                    recommendation_id=recommendation_id,
-                    product_id=rec['product_id'],
-                    product_name=rec['product_name'],
-                    node_id=rec['node_id'],
-                    supplier_info=investigation.supplier_info,
-                    quantity=decision.final_quantity
+                purchase_order, post_validation, final_status = self._create_po(
+                    recommendation_id, rec, decision, investigation, trace
                 )
-                
-                if purchase_order and not post_validation.escalated:
-                    final_status = "accepted" if decision.decision == DecisionType.ACCEPT else "modified"
-                    db.add_trace(recommendation_id, "po_created", {
-                        "po_id": purchase_order.po_id,
-                        "total_amount": purchase_order.total_amount
-                    })
-                    trace.append({
-                        "step": "po_created",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "message": f"Purchase order {purchase_order.po_id} created for ₹{purchase_order.total_amount:.2f}"
-                    })
-                else:
-                    detail = "; ".join(post_validation.failures)
-                    db.add_trace(recommendation_id, "po_creation_escalated", {
-                        "po_id": purchase_order.po_id if purchase_order else None,
-                        "failures": post_validation.failures
-                    })
-                    trace.append({
-                        "step": "po_creation_failed_escalated",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "message": f"PO creation failed after retry, escalated to human: {detail}"
-                    })
             
             else:
                 reasons = [r for r in (
@@ -258,6 +224,150 @@ class PurchasingAgentOrchestrator:
             "post_validation": post_validation,
             "trace": trace
         }
+    
+    def _create_po(
+        self,
+        recommendation_id: str,
+        rec: Dict[str, Any],
+        decision: AgentDecision,
+        investigation: InvestigationResult,
+        trace: List[Dict[str, Any]]
+    ):
+        """Create the PO for a validated decision. Returns (po, post_validation, final_status)."""
+        final_status = "escalated"
+        db.add_trace(recommendation_id, "po_creation_started", {})
+        trace.append({
+            "step": "po_creation_started",
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "Creating purchase order"
+        })
+        
+        # Import here to avoid circular dependency
+        from app.actions.purchase_order import PurchaseOrderManager
+        po_manager = PurchaseOrderManager()
+        
+        purchase_order, post_validation = po_manager.create_purchase_order(
+            recommendation_id=recommendation_id,
+            product_id=rec['product_id'],
+            product_name=rec['product_name'],
+            node_id=rec['node_id'],
+            supplier_info=investigation.supplier_info,
+            quantity=decision.final_quantity
+        )
+        
+        if purchase_order and not post_validation.escalated:
+            final_status = "accepted" if decision.decision == DecisionType.ACCEPT else "modified"
+            db.add_trace(recommendation_id, "po_created", {
+                "po_id": purchase_order.po_id,
+                "total_amount": purchase_order.total_amount
+            })
+            trace.append({
+                "step": "po_created",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": f"Purchase order {purchase_order.po_id} created for ₹{purchase_order.total_amount:.2f}"
+            })
+        else:
+            detail = "; ".join(post_validation.failures)
+            db.add_trace(recommendation_id, "po_creation_escalated", {
+                "po_id": purchase_order.po_id if purchase_order else None,
+                "failures": post_validation.failures
+            })
+            trace.append({
+                "step": "po_creation_failed_escalated",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": f"PO creation failed after retry, escalated to human: {detail}"
+            })
+        
+        return purchase_order, post_validation, final_status
+    
+    def approve_recommendation(self, recommendation_id: str, approved_by: str, notes: str = "") -> Dict[str, Any]:
+        """Human approval of an escalated ACCEPT/MODIFY decision.
+        
+        Approval only waives the approval rules (high value / low confidence).
+        Hard constraints are re-validated against fresh data and still block.
+        """
+        rec = db.get_recommendation(recommendation_id)
+        if not rec:
+            raise ValueError(f"Recommendation {recommendation_id} not found")
+        
+        decision_row = db.get_latest_decision(recommendation_id)
+        if (not decision_row
+                or decision_row['decision'] not in (DecisionType.ACCEPT.value, DecisionType.MODIFY.value)):
+            raise NotApprovableError("No ACCEPT/MODIFY decision to approve - reject it or create a new recommendation")
+        
+        if not db.claim_recommendation(recommendation_id, from_status="escalated"):
+            raise AlreadyReviewedError(
+                f"Recommendation {recommendation_id} is not awaiting approval (status: {rec['status']})"
+            )
+        
+        try:
+            decision = AgentDecision(
+                recommendation_id=recommendation_id,
+                decision=decision_row['decision'],
+                final_quantity=decision_row['final_quantity'],
+                final_supplier=decision_row['final_supplier'],
+                reasoning=decision_row['reasoning'],
+                evidence=json.loads(decision_row['evidence']),
+                confidence=decision_row['confidence'],
+                requires_approval=bool(decision_row['requires_approval']),
+                approval_reason=decision_row['approval_reason'],
+                llm_model=decision_row['llm_model'],
+            )
+            investigation = self._investigate(rec)
+            validation_result = self._validate_decision(recommendation_id, decision, investigation)
+            
+            blocking = [
+                key for key, result in validation_result.validations.items()
+                if not result.passed and not result.warning and key != "approval_threshold"
+            ]
+            db.add_trace(recommendation_id, "approval_review", {
+                "approved_by": approved_by, "notes": notes, "blocking_rules": blocking
+            })
+            
+            trace: List[Dict[str, Any]] = []
+            if blocking:
+                db.update_recommendation_status(recommendation_id, "escalated")
+                raise NotApprovableError(
+                    "Hard constraints still fail, approval cannot override: "
+                    + "; ".join(validation_result.failed_rules)
+                )
+            
+            db.add_trace(recommendation_id, "approved_by_human", {
+                "approved_by": approved_by, "notes": notes
+            })
+            purchase_order, post_validation, final_status = self._create_po(
+                recommendation_id, rec, decision, investigation, trace
+            )
+            db.update_recommendation_status(recommendation_id, final_status)
+            return {
+                "recommendation_id": recommendation_id,
+                "status": final_status,
+                "approved_by": approved_by,
+                "purchase_order": purchase_order,
+                "post_validation": post_validation,
+                "trace": trace,
+            }
+        except NotApprovableError:
+            raise
+        except Exception as e:
+            db.update_recommendation_status(recommendation_id, "escalated")
+            db.add_trace(recommendation_id, "approval_failed", {"error": str(e)})
+            raise
+    
+    def reject_recommendation(self, recommendation_id: str, rejected_by: str, reason: str) -> Dict[str, Any]:
+        """Human rejection of an escalated recommendation. No PO is created."""
+        rec = db.get_recommendation(recommendation_id)
+        if not rec:
+            raise ValueError(f"Recommendation {recommendation_id} not found")
+        if not db.claim_recommendation(recommendation_id, from_status="escalated"):
+            raise AlreadyReviewedError(
+                f"Recommendation {recommendation_id} is not awaiting a human decision (status: {rec['status']})"
+            )
+        db.add_trace(recommendation_id, "rejected_by_human", {
+            "rejected_by": rejected_by, "reason": reason
+        })
+        db.update_recommendation_status(recommendation_id, "rejected")
+        return {"recommendation_id": recommendation_id, "status": "rejected", "rejected_by": rejected_by}
     
     def _investigate(self, rec: Dict[str, Any]) -> InvestigationResult:
         """Run all investigation tools"""

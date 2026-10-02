@@ -157,15 +157,25 @@ class Database:
                 (status, recommendation_id)
             )
     
-    def claim_recommendation(self, recommendation_id: str) -> bool:
-        """Atomically move pending_review -> investigating. False if already claimed."""
+    def claim_recommendation(self, recommendation_id: str, from_status: str = "pending_review") -> bool:
+        """Atomically move from_status -> investigating. False if not in that status."""
         with self.get_cursor() as cursor:
             cursor.execute(
                 "UPDATE recommendations SET status = 'investigating' "
-                "WHERE recommendation_id = ? AND status = 'pending_review'",
-                (recommendation_id,)
+                "WHERE recommendation_id = ? AND status = ?",
+                (recommendation_id, from_status)
             )
             return cursor.rowcount == 1
+    
+    def get_latest_decision(self, recommendation_id: str) -> Optional[Dict[str, Any]]:
+        """Most recent agent decision for a recommendation"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM decisions WHERE recommendation_id = ? ORDER BY id DESC LIMIT 1",
+                (recommendation_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
     
     def get_committed_spend(self, node_id: str) -> float:
         """Total value of live agent POs for a node this month (not yet in static budget data)"""

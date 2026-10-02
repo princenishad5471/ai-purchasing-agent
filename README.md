@@ -376,6 +376,22 @@ Returns:
 GET /api/recommendations/{recommendation_id}/trace
 ```
 
+### Approve / Reject an Escalation (human)
+```
+POST /api/recommendations/{recommendation_id}/approve   {"approved_by": "alice", "notes": "..."}
+POST /api/recommendations/{recommendation_id}/reject    {"rejected_by": "bob", "reason": "..."}
+```
+Only recommendations in `escalated` status can be approved or rejected. Approval waives only the
+approval rules (high value, low confidence); hard constraints (MOQ, storage, budget, supplier limits)
+are re-validated against fresh data and still block (`409`). Both endpoints require `X-API-Key` and
+are disabled (`503`) unless `API_KEY` is configured. Approver and notes are written to the trace.
+
+### Authentication
+Set `API_KEY` to require an `X-API-Key` header on all write endpoints. With it unset the API runs in
+open demo mode (create/review only; approvals stay disabled). CORS allows only `CORS_ORIGINS`
+(default `http://localhost:3000`) and the server binds `127.0.0.1` unless `HOST` is set. The Vite dev
+server injects `API_KEY` into proxied requests, so the key is never shipped to the browser.
+
 ### Health Check
 ```http
 GET /api/health
