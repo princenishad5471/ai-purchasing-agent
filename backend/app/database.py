@@ -149,6 +149,36 @@ class Database:
                 return dict(row)
         return None
     
+    def update_recommendation_status(self, recommendation_id: str, status: str):
+        """Move a recommendation to a new status"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE recommendations SET status = ? WHERE recommendation_id = ?",
+                (status, recommendation_id)
+            )
+    
+    def claim_recommendation(self, recommendation_id: str) -> bool:
+        """Atomically move pending_review -> investigating. False if already claimed."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE recommendations SET status = 'investigating' "
+                "WHERE recommendation_id = ? AND status = 'pending_review'",
+                (recommendation_id,)
+            )
+            return cursor.rowcount == 1
+    
+    def get_committed_spend(self, node_id: str) -> float:
+        """Total value of live agent POs for a node this month (not yet in static budget data)"""
+        month_start = datetime.utcnow().strftime("%Y-%m-01")
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT COALESCE(SUM(total_amount), 0) AS total
+                FROM purchase_orders
+                WHERE node_id = ? AND status NOT IN ('failed', 'cancelled')
+                  AND created_at >= ?
+            """, (node_id, month_start))
+            return float(cursor.fetchone()['total'])
+    
     def save_investigation(self, recommendation_id: str, investigation: Dict[str, Any]):
         """Save investigation results"""
         with self.get_cursor() as cursor:

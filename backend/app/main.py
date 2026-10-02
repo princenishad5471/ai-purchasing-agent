@@ -12,7 +12,8 @@ from app.models import (
     RecommendationStatus
 )
 from app.database import db
-from app.agent.orchestrator import PurchasingAgentOrchestrator
+from app.agent.orchestrator import PurchasingAgentOrchestrator, AlreadyReviewedError
+from app.agent.tools import DataNotFoundError
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -121,6 +122,10 @@ async def review_recommendation(recommendation_id: str):
             "trace": result["trace"]
         }
     
+    except AlreadyReviewedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except DataNotFoundError as e:
+        raise HTTPException(status_code=422, detail=f"Escalated - missing data: {e}")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

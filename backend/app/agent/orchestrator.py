@@ -14,6 +14,14 @@ from app.validators.constraints import PurchaseConstraintValidator
 from app.database import db
 
 
+APPROVAL_COST_THRESHOLD = 50000.0
+MIN_AUTO_CONFIDENCE = 0.7
+
+
+class AlreadyReviewedError(Exception):
+    """Recommendation has already been (or is being) reviewed"""
+
+
 class PurchasingAgentOrchestrator:
     def __init__(self):
         # Determine data directory relative to this file
@@ -26,7 +34,7 @@ class PurchasingAgentOrchestrator:
         llm_model = os.getenv("LLM_MODEL", "gpt-4")
         self.llm_client = LLMClient(provider=llm_provider, model=llm_model)
         
-        self.validator = PurchaseConstraintValidator()
+        self.validator = PurchaseConstraintValidator(approval_threshold=APPROVAL_COST_THRESHOLD)
     
     def review_recommendation(self, recommendation_id: str) -> Dict[str, Any]:
         """Main orchestration flow"""
@@ -36,6 +44,21 @@ class PurchasingAgentOrchestrator:
         if not rec:
             raise ValueError(f"Recommendation {recommendation_id} not found")
         
+        # Idempotency: only one review per recommendation, so a repeat call
+        # can never create a second PO.
+        if not db.claim_recommendation(recommendation_id):
+            raise AlreadyReviewedError(
+                f"Recommendation {recommendation_id} already reviewed (status: {rec['status']})"
+            )
+        
+        try:
+            return self._run_review(recommendation_id, rec)
+        except Exception as e:
+            db.update_recommendation_status(recommendation_id, "escalated")
+            db.add_trace(recommendation_id, "review_failed", {"error": str(e)})
+            raise
+    
+    def _run_review(self, recommendation_id: str, rec: Dict[str, Any]) -> Dict[str, Any]:
         trace = []
         
         # Step 1: Investigation
@@ -71,13 +94,16 @@ class PurchasingAgentOrchestrator:
         
         # Determine if approval needed based on cost or confidence
         total_cost = decision_data['final_quantity'] * investigation.supplier_info.unit_price
-        requires_approval = total_cost > 50000 or decision_data['confidence'] < 0.7
+        requires_approval = (
+            total_cost > APPROVAL_COST_THRESHOLD
+            or decision_data['confidence'] < MIN_AUTO_CONFIDENCE
+        )
         approval_reason = None
         
-        if total_cost > 50000:
-            approval_reason = f"High-value purchase: ₹{total_cost:.2f} exceeds ₹50,000 threshold"
-        elif decision_data['confidence'] < 0.7:
-            approval_reason = f"Low confidence: {decision_data['confidence']} < 0.7"
+        if total_cost > APPROVAL_COST_THRESHOLD:
+            approval_reason = f"High-value purchase: ₹{total_cost:.2f} exceeds ₹{APPROVAL_COST_THRESHOLD:,.0f} threshold"
+        elif decision_data['confidence'] < MIN_AUTO_CONFIDENCE:
+            approval_reason = f"Low confidence: {decision_data['confidence']} < {MIN_AUTO_CONFIDENCE}"
         
         decision_data['requires_approval'] = requires_approval
         decision_data['approval_reason'] = approval_reason
@@ -135,9 +161,12 @@ class PurchasingAgentOrchestrator:
         # Step 4: Take Action (if applicable)
         purchase_order = None
         post_validation = None
+        final_status = "escalated"
         
         if decision.decision in [DecisionType.ACCEPT, DecisionType.MODIFY]:
-            if validation_result.all_passed and not validation_result.requires_escalation:
+            if (validation_result.all_passed
+                    and not validation_result.requires_escalation
+                    and not decision.requires_approval):
                 db.add_trace(recommendation_id, "po_creation_started", {})
                 trace.append({
                     "step": "po_creation_started",
@@ -159,6 +188,7 @@ class PurchasingAgentOrchestrator:
                 )
                 
                 if purchase_order:
+                    final_status = "accepted" if decision.decision == DecisionType.ACCEPT else "modified"
                     db.add_trace(recommendation_id, "po_created", {
                         "po_id": purchase_order.po_id,
                         "total_amount": purchase_order.total_amount
@@ -182,17 +212,23 @@ class PurchasingAgentOrchestrator:
                         "message": "PO creation failed"
                     })
             
-            elif validation_result.requires_escalation:
-                db.add_trace(recommendation_id, "escalated", {
-                    "reason": validation_result.escalation_reason
-                })
+            else:
+                reasons = [r for r in (
+                    validation_result.escalation_reason,
+                    decision.approval_reason if decision.requires_approval else None,
+                    "; ".join(validation_result.failed_rules) or None,
+                ) if r]
+                reason = "; ".join(dict.fromkeys(reasons)) or "Approval required"
+                db.add_trace(recommendation_id, "escalated", {"reason": reason})
                 trace.append({
                     "step": "escalated",
                     "timestamp": datetime.utcnow().isoformat(),
-                    "message": f"Escalated to human: {validation_result.escalation_reason}"
+                    "message": f"Escalated to human: {reason}"
                 })
+                final_status = "escalated"
         
         elif decision.decision == DecisionType.REJECT:
+            final_status = "rejected"
             db.add_trace(recommendation_id, "recommendation_rejected", {
                 "reasoning": decision.reasoning
             })
@@ -211,6 +247,8 @@ class PurchasingAgentOrchestrator:
                 "timestamp": datetime.utcnow().isoformat(),
                 "message": "Requires further human investigation"
             })
+        
+        db.update_recommendation_status(recommendation_id, final_status)
         
         # Return complete result
         return {
@@ -238,6 +276,9 @@ class PurchasingAgentOrchestrator:
         storage = self.tools.get_storage_capacity(rec['node_id'], rec['product_id'])
         category = self.tools.get_product_category(rec['product_id'])
         budget = self.tools.get_budget_info(rec['node_id'], category)
+        committed = db.get_committed_spend(rec['node_id'])
+        if committed:
+            budget.remaining = max(0.0, budget.remaining - committed)
         sales_velocity = self.tools.get_sales_velocity(rec['node_id'], rec['product_id'])
         
         # Calculate inventory coverage
