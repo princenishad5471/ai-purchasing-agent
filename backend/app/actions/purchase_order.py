@@ -34,27 +34,41 @@ class PurchaseOrderManager:
         retry_count = 0
         last_error = None
         
+        # Build the PO once: the same po_id is reused on every retry, so a retry
+        # after a partial failure can never create a second PO.
+        po = self._create_po(
+            recommendation_id,
+            product_id,
+            product_name,
+            node_id,
+            supplier_info,
+            quantity
+        )
+        saved = False
+        
         for attempt in range(max_retries + 1):
             try:
                 # Simulate potential failure
                 if random.random() < self.failure_rate:
                     raise Exception("Simulated PO creation failure")
                 
-                # Create PO
-                po = self._create_po(
-                    recommendation_id,
-                    product_id,
-                    product_name,
-                    node_id,
-                    supplier_info,
-                    quantity
-                )
-                
-                # Save to database
-                db.save_purchase_order(po.model_dump(mode='json'))
+                # Save to database (once)
+                if not saved:
+                    db.save_purchase_order(po.model_dump(mode='json'))
+                    saved = True
                 
                 # Post-action validation
                 validation = self._validate_po_creation(po)
+                
+                if validation.failures:
+                    # A failed post-check means the PO is not safely in flight
+                    validation.escalated = True
+                    po.status = POStatus.FAILED
+                    db.update_po_status(po.po_id, po.status.value)
+                    db.add_trace(recommendation_id, "po_post_validation_failed", {
+                        "po_id": po.po_id,
+                        "failures": validation.failures
+                    })
                 
                 db.save_validation({
                     "recommendation_id": recommendation_id,
@@ -78,8 +92,12 @@ class PurchaseOrderManager:
                     continue
                 else:
                     # Max retries exceeded - escalate
+                    if saved:
+                        po.status = POStatus.FAILED
+                        db.update_po_status(po.po_id, po.status.value)
+                    
                     validation = PostActionValidation(
-                        po_id="",
+                        po_id=po.po_id if saved else "",
                         checks={
                             "po_created": False,
                             "po_id_generated": False,

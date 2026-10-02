@@ -61,6 +61,32 @@ class PurchaseConstraintValidator:
             requires_escalation=not passed
         )
     
+    def validate_category_budget(self, total_cost: float, category_budget: float) -> ValidationResult:
+        """Cost must fit the remaining budget for the product category"""
+        passed = total_cost <= category_budget
+        
+        return ValidationResult(
+            passed=passed,
+            rule="category_budget",
+            message=f"Cost ₹{total_cost:.2f} {'within' if passed else 'exceeds'} category budget ₹{category_budget:.2f}",
+            value=total_cost,
+            threshold=category_budget,
+            requires_escalation=not passed
+        )
+    
+    def validate_product_allocation(self, quantity: int, allocation: int) -> ValidationResult:
+        """Quantity cannot exceed the storage allocated to this product"""
+        passed = quantity <= allocation
+        
+        return ValidationResult(
+            passed=passed,
+            rule="product_allocation",
+            message=f"Quantity {quantity} {'within' if passed else 'exceeds'} product storage allocation {allocation}",
+            value=quantity,
+            threshold=allocation,
+            requires_escalation=not passed
+        )
+    
     def validate_supplier_availability(self, requested: int, available: int) -> ValidationResult:
         """Supplier must have sufficient stock"""
         passed = requested <= available
@@ -117,7 +143,9 @@ class PurchaseConstraintValidator:
             "supplier_moq_met": self.validate_supplier_moq(quantity, supplier_info.moq),
             "supplier_max_qty": self.validate_supplier_max_qty(quantity, supplier_info.max_order_qty),
             "storage_capacity": self.validate_storage_capacity(quantity, storage_info.available),
+            "product_allocation": self.validate_product_allocation(quantity, storage_info.product_allocation),
             "budget_available": self.validate_budget(total_cost, budget_info.remaining),
+            "category_budget": self.validate_category_budget(total_cost, budget_info.product_category_budget),
             "supplier_availability": self.validate_supplier_availability(quantity, supplier_info.available_quantity),
             "safety_stock": self.validate_safety_stock(projected_stock, safety_stock),
             "approval_threshold": self.validate_approval_threshold(total_cost)

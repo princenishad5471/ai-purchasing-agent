@@ -9,6 +9,14 @@ from app.models import (
 )
 
 
+# Open POs in these states will never deliver stock, so they must not count as inbound
+INACTIVE_PO_STATUSES = {"cancelled", "canceled", "delivered", "received", "closed", "failed"}
+
+
+class DataNotFoundError(ValueError):
+    """Required investigation data is missing - never guess, escalate instead"""
+
+
 class InvestigationTools:
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
@@ -45,14 +53,7 @@ class InvestigationTools:
         inventory = self.inventory_data.get(node_id, {}).get(product_id, {})
         
         if not inventory:
-            # Return default if not found
-            return InventoryInfo(
-                current_stock=0,
-                reserved_stock=0,
-                available_stock=0,
-                reorder_point=100,
-                safety_stock=50
-            )
+            raise DataNotFoundError(f"No inventory data for {product_id} at {node_id}")
         
         return InventoryInfo(**inventory)
     
@@ -61,13 +62,7 @@ class InvestigationTools:
         forecast = self.demand_data.get(node_id, {}).get(product_id, {})
         
         if not forecast:
-            # Return default if not found
-            return DemandForecast(
-                daily_avg=50.0,
-                forecast_7d=350.0,
-                forecast_14d=700.0,
-                forecast_30d=1500.0
-            )
+            raise DataNotFoundError(f"No demand forecast for {product_id} at {node_id}")
         
         return DemandForecast(**forecast)
     
@@ -80,6 +75,7 @@ class InvestigationTools:
             OpenPO(**order) 
             for order in orders 
             if order.get('product_id') == product_id
+            and str(order.get('status', '')).lower() not in INACTIVE_PO_STATUSES
         ]
         
         return relevant_orders
@@ -106,38 +102,32 @@ class InvestigationTools:
         """Tool 5: Get storage capacity information"""
         storage = self.storage_data.get(node_id, {})
         
-        if not storage:
-            return StorageInfo(
-                capacity=5000,
-                current_usage=2000,
-                available=3000,
-                product_allocation=500
-            )
+        allocation = storage.get('allocations', {}).get(product_id)
+        
+        if not storage or allocation is None:
+            raise DataNotFoundError(f"No storage data for {product_id} at {node_id}")
         
         return StorageInfo(
-            capacity=storage.get('capacity', 5000),
-            current_usage=storage.get('current_usage', 0),
-            available=storage.get('available', 5000),
-            product_allocation=storage.get('allocations', {}).get(product_id, 500)
+            capacity=storage['capacity'],
+            current_usage=storage['current_usage'],
+            available=storage['available'],
+            product_allocation=allocation
         )
     
     def get_budget_info(self, node_id: str, category: str) -> BudgetInfo:
         """Tool 6: Get budget information"""
         budget = self.budgets_data.get(node_id, {})
         
-        if not budget:
-            return BudgetInfo(
-                node_budget=500000.0,
-                spent_this_month=200000.0,
-                remaining=300000.0,
-                product_category_budget=50000.0
-            )
+        category_budget = budget.get('categories', {}).get(category)
+        
+        if not budget or category_budget is None:
+            raise DataNotFoundError(f"No budget data for category '{category}' at {node_id}")
         
         return BudgetInfo(
-            node_budget=budget.get('node_budget', 500000.0),
-            spent_this_month=budget.get('spent_this_month', 0.0),
-            remaining=budget.get('remaining', 500000.0),
-            product_category_budget=budget.get('categories', {}).get(category, 50000.0)
+            node_budget=budget['node_budget'],
+            spent_this_month=budget['spent_this_month'],
+            remaining=budget['remaining'],
+            product_category_budget=category_budget
         )
     
     def get_sales_velocity(self, node_id: str, product_id: str) -> SalesVelocity:
@@ -145,11 +135,7 @@ class InvestigationTools:
         velocity = self.sales_data.get(node_id, {}).get(product_id, {})
         
         if not velocity:
-            return SalesVelocity(
-                last_7d_daily_avg=50.0,
-                last_30d_daily_avg=48.0,
-                trend="stable"
-            )
+            raise DataNotFoundError(f"No sales history for {product_id} at {node_id}")
         
         return SalesVelocity(**velocity)
     
@@ -167,23 +153,26 @@ class InvestigationTools:
         # Available stock
         available = current_stock - reserved_stock
         
-        # Add incoming orders (within next 7 days)
+        # Add active incoming orders due within 7 days (overdue active orders still count)
         today = datetime.now()
         for order in open_orders:
             try:
                 delivery_date = datetime.strptime(order.expected_delivery, "%Y-%m-%d")
-                days_until_delivery = (delivery_date - today).days
-                
-                if 0 <= days_until_delivery <= 7:
-                    # Count orders arriving soon
-                    available += order.quantity
-            except:
-                pass
+            except ValueError:
+                raise DataNotFoundError(
+                    f"PO {order.po_id} has invalid expected_delivery '{order.expected_delivery}'"
+                )
+            if (delivery_date - today).days <= 7:
+                available += order.quantity
         
         # Calculate coverage
         coverage_days = available / daily_avg
         
         return round(coverage_days, 1)
+    
+    def get_category_product_ids(self, category: str) -> List[str]:
+        """Helper: all product ids in a category"""
+        return [pid for pid, p in self.products_data.items() if p.get('category') == category]
     
     def get_product_category(self, product_id: str) -> str:
         """Helper: Get product category"""
