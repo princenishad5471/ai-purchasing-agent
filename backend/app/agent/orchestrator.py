@@ -382,11 +382,21 @@ class PurchasingAgentOrchestrator:
             raise ValueError(f"Supplier {rec['recommended_supplier']} not found for product {rec['product_id']}")
         
         storage = self.tools.get_storage_capacity(rec['node_id'], rec['product_id'])
+        # Space already spoken for by stock on its way in (open POs + agent POs)
+        inbound = sum(o.quantity for o in open_orders) + db.get_inbound_quantity(rec['node_id'], rec['product_id'])
+        storage.available = max(0, storage.available - inbound)
+        
         category = self.tools.get_product_category(rec['product_id'])
         budget = self.tools.get_budget_info(rec['node_id'], category)
+        # Spend the agent already committed this month is not in the static budget data
         committed = db.get_committed_spend(rec['node_id'])
         if committed:
             budget.remaining = max(0.0, budget.remaining - committed)
+        committed_category = db.get_committed_spend(
+            rec['node_id'], self.tools.get_category_product_ids(category)
+        )
+        if committed_category:
+            budget.product_category_budget = max(0.0, budget.product_category_budget - committed_category)
         sales_velocity = self.tools.get_sales_velocity(rec['node_id'], rec['product_id'])
         
         # Calculate inventory coverage

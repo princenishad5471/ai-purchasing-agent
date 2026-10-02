@@ -191,14 +191,22 @@ class LLMClient:
             reasoning_parts.append(f"Low inventory coverage: {investigation.inventory_coverage_days} days (target: 7+ days)")
         
         # Check if recommendation exceeds storage
-        if rec_qty > storage.available:
-            decision = DecisionType.MODIFY
-            final_quantity = min(storage.available, storage.product_allocation)
-            reasoning_parts.append(f"Recommended quantity ({rec_qty}) exceeds available storage ({storage.available})")
+        storage_limit = min(storage.available, storage.product_allocation)
+        if rec_qty > storage_limit:
+            if storage_limit < supplier.moq:
+                # Shrinking to fit would go below the supplier MOQ (or to zero): a human decides
+                decision = DecisionType.INVESTIGATE_FURTHER
+                reasoning_parts.append(
+                    f"Only {storage_limit} units of storage fit, below supplier MOQ ({supplier.moq}) - cannot shrink the order to fit"
+                )
+            else:
+                decision = DecisionType.MODIFY
+                final_quantity = storage_limit
+            reasoning_parts.append(f"Recommended quantity ({rec_qty}) exceeds storage limit ({storage_limit}: available {storage.available}, product allocation {storage.product_allocation})")
             reasoning_parts.append(f"Modified to {final_quantity} units to fit storage constraints")
         
         # Check if we're over-ordering given incoming stock
-        if incoming_qty > 0:
+        if incoming_qty > 0 and demand.daily_avg > 0:
             days_covered_with_incoming = (inventory.available_stock + incoming_qty) / demand.daily_avg
             if days_covered_with_incoming > 10:
                 decision = DecisionType.INVESTIGATE_FURTHER

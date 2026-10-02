@@ -303,7 +303,7 @@ OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 
 # Database (default: sqlite:///./purchasing_agent.db)
-DATABASE_URL=sqlite:///./purchasing_agent.db
+# DATABASE_PATH=/path/to/purchasing_agent.db  (default: backend/purchasing_agent.db)
 
 # Debug mode
 DEBUG=true

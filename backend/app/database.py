@@ -1,4 +1,5 @@
 """Database setup using SQLite"""
+import os
 import sqlite3
 from contextlib import contextmanager
 from typing import Optional, Dict, Any, List
@@ -7,8 +8,11 @@ from datetime import datetime
 
 
 class Database:
-    def __init__(self, db_path: str = "purchasing_agent.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        # Absolute default so the DB does not depend on the working directory
+        self.db_path = db_path or os.getenv("DATABASE_PATH") or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "purchasing_agent.db"
+        )
         self.init_db()
     
     def get_connection(self):
@@ -177,17 +181,41 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
     
-    def get_committed_spend(self, node_id: str) -> float:
-        """Total value of live agent POs for a node this month (not yet in static budget data)"""
+    def get_committed_spend(self, node_id: str, product_ids: Optional[List[str]] = None) -> float:
+        """Value of live agent POs for a node this month (not yet in the static budget data).
+        With product_ids, only those line items count (category spend)."""
         month_start = datetime.utcnow().strftime("%Y-%m-01")
         with self.get_cursor() as cursor:
             cursor.execute("""
-                SELECT COALESCE(SUM(total_amount), 0) AS total
-                FROM purchase_orders
+                SELECT total_amount, line_items FROM purchase_orders
                 WHERE node_id = ? AND status NOT IN ('failed', 'cancelled')
                   AND created_at >= ?
             """, (node_id, month_start))
-            return float(cursor.fetchone()['total'])
+            rows = cursor.fetchall()
+        if product_ids is None:
+            return float(sum(r['total_amount'] for r in rows))
+        wanted = set(product_ids)
+        return float(sum(
+            item.get('total_price', 0)
+            for r in rows for item in json.loads(r['line_items'])
+            if item.get('product_id') in wanted
+        ))
+    
+    def get_inbound_quantity(self, node_id: str, product_id: str) -> int:
+        """Units on live agent POs for a product that have not been delivered yet"""
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT line_items FROM purchase_orders
+                WHERE node_id = ? AND status IN ('submitted', 'confirmed')
+                  AND expected_delivery >= ?
+            """, (node_id, today))
+            rows = cursor.fetchall()
+        return int(sum(
+            item.get('quantity', 0)
+            for r in rows for item in json.loads(r['line_items'])
+            if item.get('product_id') == product_id
+        ))
     
     def save_investigation(self, recommendation_id: str, investigation: Dict[str, Any]):
         """Save investigation results"""
@@ -263,7 +291,7 @@ class Database:
                 SELECT step, data, timestamp
                 FROM trace_logs
                 WHERE recommendation_id = ?
-                ORDER BY timestamp
+                ORDER BY id
             """, (recommendation_id,))
             rows = cursor.fetchall()
             return [
